@@ -60,6 +60,8 @@ Animated tricolor flag, live resource bars, network, security and Docker details
 ---
 
 ## Flag art
+compare Neoftech to bharatfetch
+ **https://i.postimg.cc/XvGY5t85/Screenshot-2026-11-08-23-26-48-04-61c78dc80ee02b53007c815fefe993e3.jpg**
 
 ### Terminal flag (what the script draws)
 
