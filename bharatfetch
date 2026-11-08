@@ -1,0 +1,250 @@
+#!/bin/bash
+# bharatfetch - India themed system info tool
+export LC_ALL=C.UTF-8
+ANIM=1; FULL=0
+for a in "$@"; do case "$a" in --static) ANIM=0;; --full) FULL=1;; --help|-h) echo "bharatfetch [--static] [--full]"; exit 0;; esac; done
+[ ! -t 1 ] && ANIM=0
+R=$'\e[0m'; BD=$'\e[1m'
+S=$'\e[38;5;208m'; G=$'\e[38;5;34m'; WH=$'\e[97m'; DM=$'\e[38;5;245m'
+FW=34; FH=15
+OFF=(0 1 2 3 3 2 1 0)
+CH=('' '╲ │ ╱' '── ◉ ──' '╱ │ ╲' '')
+trap 'printf "\e[?25h"' EXIT
+
+center(){ local s="$1" l=${#1} a b; a=$(((FW-l)/2)); b=$((FW-l-a)); printf '%*s%s%*s' $a '' "$s" $b ''; }
+lab(){ printf '%s▸ %-11s%s' "$S$BD" "$1" "$R"; }
+bar(){
+  local p=$1 f i col; f=$((p*20/100))
+  if ((p>=85)); then col=196; elif ((p>=60)); then col=214; else col=40; fi
+  printf '\e[38;5;%sm' "$col"
+  for ((i=0;i<20;i++)); do ((i<f)) && printf '█' || printf '\e[38;5;240m░'; done
+  printf '%s %d%%' "$R" "$p"
+}
+hb(){ awk -v b="$1" 'BEGIN{split("B KB MB GB TB",u," ");i=1;while(b>=1024&&i<5){b/=1024;i++}printf "%.1f %s",b,u[i]}'; }
+cpu_usage(){
+  local u1 n1 s1 i1 w1 q1 sq1 u2 n2 s2 i2 w2 q2 sq2 dt di
+  read -r _ u1 n1 s1 i1 w1 q1 sq1 _ < /proc/stat; sleep 0.3
+  read -r _ u2 n2 s2 i2 w2 q2 sq2 _ < /proc/stat
+  dt=$(( (u2+n2+s2+i2+w2+q2+sq2)-(u1+n1+s1+i1+w1+q1+sq1) ))
+  di=$(( (i2+w2)-(i1+w1) ))
+  echo $(( dt>0 ? (dt-di)*100/dt : 0 ))
+}
+
+banner(){
+  local L=(
+"██████╗ ██╗  ██╗ █████╗ ██████╗  █████╗ ████████╗"
+"██╔══██╗██║  ██║██╔══██╗██╔══██╗██╔══██╗╚══██╔══╝"
+"██████╔╝███████║███████║██████╔╝███████║   ██║   "
+"██╔══██╗██╔══██║██╔══██║██╔══██╗██╔══██║   ██║   "
+"██████╔╝██║  ██║██║  ██║██║  ██║██║  ██║   ██║   "
+"╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ")
+  local C=("$S" "$S" "$WH" "$WH" "$G" "$G") i
+  echo
+  for i in 0 1 2 3 4 5; do printf '  %s%s%s\n' "${C[i]}$BD" "${L[i]}" "$R"; done
+  printf '  %s%s%s\n\n' "$DM" "सत्यमेव जयते  •  Satyameva Jayate" "$R"
+}
+
+# ---------- Gather ----------
+OS=$(. /etc/os-release; echo "$PRETTY_NAME")
+HOST=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null); HOST=${HOST:-Unknown}
+CPU=$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs)
+CORES=$(nproc)
+CPCT=$(cpu_usage)
+if command -v nvidia-smi >/dev/null; then GPU=$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)
+elif command -v lspci >/dev/null; then GPU=$(lspci | grep -iE 'vga|3d|display' | head -1 | cut -d: -f3- | xargs); fi
+GPU=${GPU:-None / virtual}
+read -r MT MU <<<"$(free -m | awk '/Mem:/{print $2,$3}')"
+read -r ST SU <<<"$(free -m | awk '/Swap:/{print $2,$3}')"
+MP=$((MU*100/MT)); SP=0; ((ST>0)) && SP=$((SU*100/ST))
+DP=$(df / --output=pcent | tail -1 | tr -dc 0-9)
+DISK=$(df -h / | awk 'NR==2{print $3" / "$2}')
+LOAD=$(awk '{print $1", "$2", "$3}' /proc/loadavg)
+PROCS=$(ps -e --no-headers | wc -l)
+USERS=$(who | wc -l)
+PKG=$(dpkg -l 2>/dev/null | grep -c '^ii')
+VIRT=$(systemd-detect-virt 2>/dev/null || echo none)
+FAILED=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+PORTS=$(ss -tuln 2>/dev/null | tail -n +2 | wc -l)
+TOP=$(ps -eo comm,%cpu --sort=-%cpu --no-headers | head -3 | awk '{printf "%s(%s%%) ",$1,$2}')
+TEMP=""; [ -r /sys/class/thermal/thermal_zone0/temp ] && TEMP="$(( $(cat /sys/class/thermal/thermal_zone0/temp)/1000 ))°C"
+IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+RX=$(cat /sys/class/net/$IF/statistics/rx_bytes 2>/dev/null || echo 0)
+TX=$(cat /sys/class/net/$IF/statistics/tx_bytes 2>/dev/null || echo 0)
+LIP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+# Docker
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  DK="$(docker ps -q | wc -l) running / $(docker ps -aq | wc -l) total"
+else DK="not installed / not running"; fi
+
+# Firewall
+if command -v ufw >/dev/null; then FW_S=$(ufw status 2>/dev/null | head -1 | sed 's/Status: //'); FW_S=${FW_S:-unknown}
+else FW_S="ufw n/a"; fi
+
+# Updates
+UPD=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
+[ -f /var/run/reboot-required ] && RB="${S}reboot needed${R}" || RB="no reboot needed"
+
+# SSH logins
+LAST=$(last -n 3 -a -w 2>/dev/null | grep -v -E '^(reboot|wtmp|$)' | head -3 | awk '{print $1" from "$NF" ("$4" "$5" "$6")"}')
+FAILSSH=$(journalctl -u ssh -u sshd --since "24 hours ago" --no-pager 2>/dev/null | grep -c "Failed password")
+
+# Public IP (cached 10 min)
+CF=/tmp/.bharatfetch_net.$UID
+if [[ ! -s $CF || $(( $(date +%s)-$(stat -c %Y "$CF") )) -gt 600 ]]; then
+  curl -s --max-time 2 https://ipinfo.io/json > "$CF" 2>/dev/null; [ -s "$CF" ] || rm -f "$CF"
+fi
+jget(){ grep -o "\"$1\": *\"[^\"]*\"" "$CF" 2>/dev/null | head -1 | sed 's/.*: *"\(.*\)"/\1/'; }
+PIP=$(jget ip); PIP=${PIP:-offline}
+GEO=""; [ "$PIP" != "offline" ] && GEO="$(jget city), $(jget country)"; ORG=$(jget org)
+
+HR=$(TZ=Asia/Kolkata date +%H); HR=$((10#$HR))
+if ((HR<12)); then GR="Suprabhat"; elif ((HR<17)); then GR="Namaste"; elif ((HR<21)); then GR="Shubh Sandhya"; else GR="Shubh Ratri"; fi
+NOW=$(TZ=Asia/Kolkata date '+%a, %d %b %Y  %I:%M %p IST')
+
+info=(
+"$S$BD$GR, $(whoami)!$R  $DM@$(hostname)$R"
+"$DM──────────────────────────────────────────────$R"
+"$(lab OS)$OS"
+"$(lab Host)$HOST"
+"$(lab Kernel)$(uname -r)"
+"$(lab Uptime)$(uptime -p | sed 's/up //')"
+"$(lab Packages)$PKG (dpkg)   ${DM}updates:$R $UPD"
+"$(lab Shell)$(basename "$SHELL")   ${DM}virt:$R $VIRT"
+"$(lab CPU)$CPU ($CORES cores)"
+"$(lab 'CPU Use')$(bar $CPCT)"
+"$(lab GPU)$GPU"
+"$(lab Load)$LOAD"
+"$(lab Memory)${MU}M / ${MT}M"
+"$(lab '')$(bar $MP)"
+"$(lab Swap)${SU}M / ${ST}M  $(bar $SP)"
+"$(lab Disk)$DISK"
+"$(lab '')$(bar $DP)"
+"$(lab Network)${IF:-n/a}  ↓ $(hb $RX)  ↑ $(hb $TX)"
+"$(lab 'Local IP')${LIP:-n/a}"
+"$(lab 'Public IP')$PIP  $DM$GEO$R"
+"$(lab ISP)${ORG:-n/a}"
+"$(lab Ports)$PORTS listening   ${DM}failed units:$R $FAILED"
+"$(lab Firewall)$FW_S   ${DM}ssh fails 24h:$R $FAILSSH"
+"$(lab Docker)$DK"
+"$(lab Procs)$PROCS running, $USERS user(s)"
+"$(lab Top)$TOP"
+"$(lab Temp)${TEMP:-n/a}   $RB"
+"$(lab 'Last SSH')$(echo "${LAST:-none}" | head -1)"
+"$(lab Time)$NOW"
+"$S$BD🇮🇳  Jai Hind!  Jai Bharat!$R"
+"$(for c in 208 214 255 40 28 18 196 39; do printf '\e[48;5;%sm    \e[0m' $c; done)"
+)
+
+flagrow(){
+  local r=$1 t=$2 sh col txt=""
+  sh=${OFF[$(((r+t)%8))]}
+  if ((r<5)); then col=208; elif ((r<10)); then col=255; txt="${CH[r-5]}"; else col=28; fi
+  printf '\e[38;5;94m┃\e[0m%*s' "$sh" ''
+  printf '\e[48;5;%sm\e[38;5;18m%s\e[0m' "$col" "$(center "$txt")"
+  printf '%*s' $((3-sh)) ''
+}
+
+M=${#info[@]}; N=$(( M>FH ? M : FH )); foff=$(((N-FH)/2))
+render(){
+  local t=$1 vis=$2 i fr
+  for ((i=0;i<N;i++)); do
+    fr=$((i-foff))
+    if ((fr>=0 && fr<FH)); then printf ' '; flagrow $fr $t; else printf '%*s' $((FW+5)) ''; fi
+    printf '   '
+    ((i<vis)) && printf '%s' "${info[i]}"
+    printf '\e[K\n'
+  done
+}
+
+QUOTES=("वसुधैव कुटुम्बकम् — the world is one family" "विद्या ददाति विनयम् — knowledge gives humility" "अहिंसा परमो धर्मः — non-violence is the highest duty" "उद्यमेन हि सिध्यन्ति कार्याणि — work brings success")
+
+
+# ---------- FULL DETAILS ----------
+sec(){ printf '\n  %s%s━━ %s %s%s\n' "$S" "$BD" "$1" "$(printf '━%.0s' $(seq 1 $((60-${#1}))))" "$R"; }
+kv(){ printf '  %s%-14s%s %s\n' "$DM" "$1" "$R" "$2"; }
+full_details(){
+  sec "HARDWARE"
+  kv "CPU model" "$CPU"
+  kv "Cores/Threads" "$(lscpu 2>/dev/null | awk -F: '/^Core\(s\) per socket/{c=$2}/^Socket\(s\)/{s=$2}/^CPU\(s\):/{t=$2}END{gsub(/ /,"",c);gsub(/ /,"",s);gsub(/ /,"",t);print c*s" cores / "t" threads"}')"
+  kv "CPU MHz" "$(lscpu 2>/dev/null | awk -F: '/CPU MHz|CPU max MHz/{gsub(/^ +/,"",$2);print $2; exit}')"
+  kv "Cache L2/L3" "$(lscpu 2>/dev/null | awk -F: '/L2 cache|L3 cache/{gsub(/^ +/,"",$2);printf "%s  ",$2}')"
+  kv "Arch" "$(uname -m)"
+  kv "RAM total" "$(free -h | awk '/Mem:/{print $2" (used "$3", free "$4", cache "$6")"}')"
+  kv "GPU" "$GPU"
+  kv "BIOS/Board" "$(cat /sys/devices/virtual/dmi/id/board_name 2>/dev/null || echo n/a)  $(cat /sys/devices/virtual/dmi/id/bios_version 2>/dev/null)"
+
+  sec "DISKS"
+  df -hT -x tmpfs -x devtmpfs -x squashfs -x overlay -x fuse.rclone 2>/dev/null | awk 'NR==1{printf "  %s%-22s %-8s %6s %6s %6s %5s%s\n","'"$DM"'",$1,$2,$3,$4,$5,$6,"'"$R"'"} NR>1{printf "  %-22s %-8s %6s %6s %6s %5s  %s\n",$1,$2,$3,$4,$5,$6,$7}'
+  command -v lsblk >/dev/null && { echo; lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null | sed 's/^/  /'; }
+
+  sec "NETWORK"
+  ip -brief addr 2>/dev/null | awk '{printf "  %-14s %-8s %s %s\n",$1,$2,$3,$4}'
+  kv "Gateway" "$(ip route 2>/dev/null | awk '/default/{print $3; exit}')"
+  kv "DNS" "$(awk '/^nameserver/{printf "%s ",$2}' /etc/resolv.conf)"
+  kv "Public IP" "$PIP  ($GEO)"
+  kv "ISP" "${ORG:-n/a}"
+  kv "IPv6" "$(ip -6 addr 2>/dev/null | awk '/global/{print $2; exit}' || true)"
+  kv "TCP conns" "$(ss -tn state established 2>/dev/null | tail -n +2 | wc -l) established"
+
+  sec "LISTENING PORTS"
+  printf '  %s%-6s %-24s %s%s\n' "$DM" "PROTO" "ADDRESS" "PROCESS" "$R"
+  ss -tulnpH 2>/dev/null | awk '{p=$NF; sub(/.*users:\(\("/,"",p); sub(/".*/,"",p); printf "  %-6s %-24s %s\n",$1,$5,p}' | sort -u | head -15
+
+  sec "TOP PROCESSES"
+  printf '  %s%-18s %6s %6s%s\n' "$DM" "COMMAND" "CPU%" "MEM%" "$R"
+  ps -eo comm,%cpu,%mem --sort=-%cpu --no-headers | head -5 | awk '{printf "  %-18s %6s %6s\n",$1,$2,$3}'
+  echo "  ${DM}-- by memory --${R}"
+  ps -eo comm,%cpu,%mem --sort=-%mem --no-headers | head -5 | awk '{printf "  %-18s %6s %6s\n",$1,$2,$3}'
+
+  sec "USERS & LOGINS"
+  who 2>/dev/null | awk '{printf "  now: %s from %s (%s %s)\n",$1,$5,$3,$4}'
+  last -n 5 -a -w 2>/dev/null | grep -v -E '^(reboot|wtmp|$)' | head -5 | sed 's/^/  /'
+  kv "Failed SSH 24h" "$FAILSSH"
+  kv "Sudo users" "$(getent group sudo | cut -d: -f4)"
+
+  sec "SECURITY"
+  kv "Firewall (ufw)" "$FW_S"
+  kv "fail2ban" "$(systemctl is-active fail2ban 2>/dev/null || echo not-installed)"
+  kv "SSH root login" "$(sshd -T 2>/dev/null | awk '/^permitrootlogin/{print $2}')"
+  kv "SSH password auth" "$(sshd -T 2>/dev/null | awk '/^passwordauthentication/{print $2}')"
+  kv "SSH port" "$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')"
+  kv "Pending updates" "$UPD   ($RB)"
+  kv "Failed units" "$FAILED"
+
+  sec "DOCKER"
+  if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+    kv "Version" "$(docker --version | cut -d, -f1)"
+    kv "Images" "$(docker images -q | wc -l)"
+    docker ps --format '  {{.Names}}\t{{.Image}}\t{{.Status}}' 2>/dev/null | column -t -s $'\t' | head -10
+  else kv "Docker" "not installed / not running"; fi
+
+  sec "SYSTEM"
+  kv "OS" "$OS"
+  kv "Kernel" "$(uname -r)"
+  kv "Hostname" "$(hostname -f 2>/dev/null || hostname)"
+  kv "Timezone" "$(timedatectl show -p Timezone --value 2>/dev/null || cat /etc/timezone 2>/dev/null)"
+  kv "Boot time" "$(uptime -s 2>/dev/null)"
+  kv "Uptime" "$(uptime -p | sed 's/up //')"
+  kv "Load avg" "$LOAD  (cores: $CORES)"
+  kv "Processes" "$PROCS total, $(ps -eo stat --no-headers | grep -c '^Z') zombie"
+  kv "Open files" "$(awk '{print $1}' /proc/sys/fs/file-nr) / $(cat /proc/sys/fs/file-max)"
+  kv "Entropy" "$(cat /proc/sys/kernel/random/entropy_avail 2>/dev/null)"
+  kv "Locale" "${LANG:-n/a}"
+  echo
+}
+
+banner
+if ((ANIM==1 && ${COLUMNS:-$(tput cols)}>=105)); then
+  printf '\e[?25l'; FR=30
+  for ((f=0;f<FR;f++)); do
+    vis=$((f*M/(FR-8))); ((vis>M)) && vis=$M
+    render $f $vis
+    ((f<FR-1)) && { printf '\e[%dA' $N; sleep 0.07; }
+  done
+  printf '\e[?25h'
+else
+  render 0 $M
+fi
+printf '\n  %s%s%s\n\n' "$DM" "${QUOTES[RANDOM%${#QUOTES[@]}]}" "$R"
+((FULL==1)) && full_details
