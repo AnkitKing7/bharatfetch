@@ -1,0 +1,119 @@
+#!/bin/bash
+# bharatmini - compact India-themed login banner (MOTD friendly, fast, no animation)
+export LC_ALL=C.UTF-8
+CACHE_DIR=/var/cache/bharatfetch
+CACHE=$CACHE_DIR/stats
+
+# ---------------- background refresh of slow data ----------------
+if [ "$1" = "--refresh" ]; then
+  mkdir -p "$CACHE_DIR" 2>/dev/null || exit 0
+  J=$(curl -s --max-time 3 https://ipinfo.io/json 2>/dev/null)
+  jget(){ printf '%s' "$J" | grep -o "\"$1\": *\"[^\"]*\"" | head -1 | sed 's/.*: *"\(.*\)"/\1/'; }
+  PIP=$(jget ip); CITY=$(jget city); CC=$(jget country)
+  FAILSSH=$(journalctl -u ssh -u sshd --since "24 hours ago" -q --no-pager 2>/dev/null | grep -c "Failed password")
+  UPD=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
+  if command -v ufw >/dev/null; then FWS=$(ufw status 2>/dev/null | head -1 | sed 's/Status: //'); else FWS="n/a"; fi
+  RB=no; [ -f /var/run/reboot-required ] && RB=yes
+  {
+    echo "PIP='${PIP:-offline}'"; echo "GEO='${CITY:+$CITY, }$CC'"
+    echo "FAILSSH='${FAILSSH:-0}'"; echo "UPD='${UPD:-0}'"
+    echo "FWS='${FWS:-n/a}'"; echo "RB='$RB'"
+  } > "$CACHE.tmp" && mv "$CACHE.tmp" "$CACHE"
+  exit 0
+fi
+
+PIP="..."; GEO=""; FAILSSH="-"; UPD="-"; FWS="-"; RB=no
+[ -r "$CACHE" ] && . "$CACHE"
+if [ ! -s "$CACHE" ] || [ $(( $(date +%s) - $(stat -c %Y "$CACHE" 2>/dev/null || echo 0) )) -gt 1800 ]; then
+  ( "$0" --refresh >/dev/null 2>&1 </dev/null & )
+fi
+
+# ---------------- colors / helpers ----------------
+R=$'\e[0m'; B=$'\e[1m'
+SF=$'\e[38;5;208m'; GN=$'\e[38;5;34m'; WH=$'\e[97m'; DM=$'\e[38;5;245m'
+lab(){ printf '%s%-7s%s' "$SF$B" "$1" "$R"; }
+bar(){
+  local p=$1 f i col; ((p>100)) && p=100; f=$((p/10))
+  if ((p>=85)); then col=196; elif ((p>=60)); then col=214; else col=40; fi
+  for ((i=0;i<10;i++)); do
+    if ((i<f)); then printf '\e[38;5;%sm█' "$col"; else printf '\e[38;5;238m░'; fi
+  done
+  printf '%s %3d%%' "$R" "$p"
+}
+hb(){ awk -v b="$1" 'BEGIN{split("B K M G T",u," ");i=1;while(b>=1024&&i<5){b/=1024;i++}printf "%.1f%s",b,u[i]}'; }
+
+# ---------------- gather (fast) ----------------
+OS=$(. /etc/os-release; echo "$PRETTY_NAME")
+KER=$(uname -r)
+UP=$(uptime -p | sed 's/^up //; s/ hours\?/h/; s/ minutes\?/m/; s/ days\?/d/; s/ weeks\?/w/; s/,//g')
+CORES=$(nproc)
+read -r _ u1 n1 s1 i1 w1 q1 sq1 _ < /proc/stat; sleep 0.25
+read -r _ u2 n2 s2 i2 w2 q2 sq2 _ < /proc/stat
+dt=$(( (u2+n2+s2+i2+w2+q2+sq2)-(u1+n1+s1+i1+w1+q1+sq1) )); di=$(( (i2+w2)-(i1+w1) ))
+CP=$(( dt>0 ? (dt-di)*100/dt : 0 ))
+LOAD=$(awk '{print $1}' /proc/loadavg)
+read -r MT MU <<<"$(free -m | awk '/Mem:/{print $2,$3}')"; MP=$((MU*100/MT))
+MEMH=$(free -h | awk '/Mem:/{print $3"/"$2}')
+DP=$(df / --output=pcent | tail -1 | tr -dc 0-9)
+DISKH=$(df -h / | awk 'NR==2{print $3"/"$2}')
+IF=$(ip route show default 2>/dev/null | awk '{print $5; exit}')
+RX=$(cat /sys/class/net/$IF/statistics/rx_bytes 2>/dev/null || echo 0)
+TX=$(cat /sys/class/net/$IF/statistics/tx_bytes 2>/dev/null || echo 0)
+LIP=$(hostname -I 2>/dev/null | awk '{print $1}')
+PORTS=$(ss -tuln 2>/dev/null | tail -n +2 | wc -l)
+FAILED=$(systemctl --failed --no-legend 2>/dev/null | wc -l)
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  DK="$(docker ps -q | wc -l)/$(docker ps -aq | wc -l)"
+else DK="-"; fi
+LAST=$(last -w -a -n 3 2>/dev/null | grep -vE '^(reboot|wtmp|$)' | sed -n 2p | awk '{printf "%s from %s (%s %s %s)",$1,$NF,$4,$5,$6}')
+LAST=${LAST:-first login}
+HR=$(TZ=Asia/Kolkata date +%H); HR=$((10#$HR))
+if ((HR<12)); then GRT="Suprabhat"; elif ((HR<17)); then GRT="Namaste"; elif ((HR<21)); then GRT="Shubh Sandhya"; else GRT="Shubh Ratri"; fi
+NOW=$(TZ=Asia/Kolkata date '+%a %d %b, %I:%M %p IST')
+HN=$(hostname); HN=${HN:0:22}
+
+# ---------------- sun-circle chakra ----------------
+HW=(13 13 12 12 10 8 5)
+CH=("  ╲ │ ╱  " "─ ─╲│╱─ ─" "────( ◉ )────" "─ ─╱│╲─ ─" "  ╱ │ ╲  ")
+art=()
+for y in -6 -5 -4 -3 -2 -1 0 1 2 3 4 5 6; do
+  ay=${y#-}; hw=${HW[ay]}; pad=$((13-hw))
+  line=$(printf '%*s' $pad '')
+  if ((y<=-3)); then
+    line+=$(printf '\e[48;5;208m%*s\e[0m' $((2*hw+1)) '')
+  elif ((y>=3)); then
+    line+=$(printf '\e[48;5;28m%*s\e[0m' $((2*hw+1)) '')
+  else
+    c=${CH[y+2]}; L=${#c}; half=$(((L-1)/2)); seg=""
+    for ((i=-hw;i<=hw;i++)); do
+      if ((i>=-half && i<=half)); then seg+="${c:i+half:1}"; else seg+=" "; fi
+    done
+    line+=$(printf '\e[48;5;255m\e[38;5;18m%s\e[0m' "$seg")
+  fi
+  line+=$(printf '%*s' $pad '')
+  art+=("$line")
+done
+
+# ---------------- info (compact) ----------------
+info=(
+"$SF$B$GRT$R, $WH$B$(whoami)$R$DM @ $HN$R"
+"$DM────────────────────────────────────────────$R"
+"$(lab OS)$OS"
+"$(lab Kernel)$KER ${DM}· up$R $UP"
+"$(lab CPU)$(bar $CP) ${DM}${CORES}c · load$R $LOAD"
+"$(lab RAM)$(bar $MP) ${DM}$MEMH$R"
+"$(lab Disk)$(bar $DP) ${DM}$DISKH$R"
+"$(lab Net)${IF:-n/a} ${DM}↓$R$(hb $RX) ${DM}↑$R$(hb $TX)"
+"$(lab IP)${LIP:-n/a} ${DM}· pub$R $PIP"
+"$(lab Secure)${DM}fw$R $FWS ${DM}· ssh-fail$R $FAILSSH ${DM}· ports$R $PORTS"
+"$(lab System)${DM}updates$R $UPD ${DM}· failed$R $FAILED ${DM}· docker$R $DK"
+"$(lab Last)$(printf '%s' "$LAST" | cut -c1-40)"
+"$(lab Time)$NOW"
+)
+
+echo
+for i in $(seq 0 12); do
+  printf '  %s   %s\n' "${art[i]}" "${info[i]}"
+done
+printf '\n  %s%s%s   %sJai%s %sHind%s %s!%s   %sसत्यमेव जयते%s\n\n' \
+  "$DM" "bharatfetch" "$R" "$SF$B" "$R" "$WH$B" "$R" "$GN$B" "$R" "$DM" "$R"
